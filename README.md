@@ -143,6 +143,20 @@ See `config.example.json` for all options. Key fields:
 - Vault unlocked only at startup with master password
 - Files excluded from git (see `.gitignore`): `config.json`, `credentials.enc.json`, `session_aliases.json`
 
+### Mac App
+
+Download `AgentForeman-mac.zip` from [GitHub Releases](https://github.com/operoncao123/agent-foreman/releases), unzip and double-click `Agent Foreman.app`.
+
+On first launch, you will be prompted for the master password. It is saved to Keychain automatically.
+
+> If macOS shows "cannot verify developer", right-click the app → Open → Open to bypass.
+
+To build from source:
+```bash
+cd macos_app
+bash build.sh
+```
+
 ### License
 
 MIT
@@ -285,6 +299,20 @@ sudo sysctl -p /etc/sysctl.d/10-ptrace.conf
   - `config.json`
   - `credentials.enc.json`
   - `session_aliases.json`
+
+### Mac App
+
+从 [GitHub Releases](https://github.com/operoncao123/agent-foreman/releases) 下载 `AgentForeman-mac.zip`，解压后双击 `Agent Foreman.app` 即可。
+
+首次运行会弹窗要求输入 master password，输入后自动保存到系统 Keychain，以后无需重复输入。
+
+> 如果 macOS 提示「无法验证开发者」，右键点击 App → 打开 → 打开 即可。
+
+自行构建：
+```bash
+cd macos_app
+bash build.sh
+```
 
 ### License
 
