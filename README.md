@@ -19,6 +19,8 @@ See which agents are working, waiting for input, or slacking — and send messag
 
 ![Dashboard](docs/screenshots/screenshot1.png)
 
+<video src="docs/screenshots/录屏.mov" controls width="100%"></video>
+
 ### Features
 
 - Real-time agent monitoring (1s background refresh, no page flicker)
@@ -166,6 +168,8 @@ MIT
 一眼看出哪个 Agent 在开工、在等回话、在摸鱼，并直接从浏览器向它发话催活。
 
 ![Dashboard](docs/screenshots/screenshot1.png)
+
+<video src="docs/screenshots/录屏.mov" controls width="100%"></video>
 
 ### 功能
 
