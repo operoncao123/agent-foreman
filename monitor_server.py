@@ -739,6 +739,9 @@ def infer_agent_type(args: str) -> str:
             return ""
         return "droid"
 
+    # Note: Cursor is an IDE, not a command-line agent
+    # Cursor AI sessions are detected from session files, not processes
+    
     return ""
 
 
@@ -1077,6 +1080,73 @@ def parse_droid_session(path: Path) -> dict[str, Any] | None:
     }
 
 
+def parse_cursor_session(path: Path) -> dict[str, Any] | None:
+    """Parse Cursor AI session file (.jsonl format, similar to Claude)."""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return None
+    if not lines:
+        return None
+
+    session_id = path.stem
+    # Extract project path from file path: ~/.cursor/projects/[PROJECT]/agent-transcripts/[SESSION_ID]/[SESSION_ID].jsonl
+    project_dir = path.parent.parent.parent
+    project_name = project_dir.name if project_dir.exists() else None
+    cwd = None
+    start_ts = None
+    heartbeat_ts = path.stat().st_mtime
+    recent_output = ""
+    last_user = ""
+
+    # Parse conversation
+    for raw in lines:
+        obj = safe_json_loads(raw)
+        if not isinstance(obj, dict):
+            continue
+
+        role = obj.get("role")
+        msg = obj.get("message", {})
+        
+        # Extract text content
+        content = msg.get("content", [])
+        if isinstance(content, list):
+            text_parts = []
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    text_parts.append(item.get("text", ""))
+            
+            text = " ".join(text_parts)
+            
+            if role == "user" and text:
+                last_user = text
+            elif role == "assistant" and text:
+                recent_output = text
+
+    # Try to infer cwd from project name
+    if project_name:
+        # Convert project name back to path (e.g., "Users-reuben-edgex-gitlab" -> "/Users/reuben/edgex/gitlab")
+        parts = project_name.split("-")
+        if len(parts) > 2 and parts[0] == "Users":
+            cwd = "/" + "/".join(parts)
+
+    # Use file timestamps for session timing
+    if not start_ts:
+        start_ts = path.stat().st_ctime
+
+    return {
+        "session_id": session_id,
+        "project": project_name,
+        "cwd": cwd,
+        "start_ts": start_ts,
+        "heartbeat_ts": heartbeat_ts,
+        "recent_output": truncate(recent_output),
+        "pending_items": [],
+        "last_user_message": truncate(last_user, 180),
+        "source_file": str(path),
+    }
+
+
 @dataclass
 class ProcInfo:
     pid: int
@@ -1315,7 +1385,7 @@ def focus_fallback(pid: int) -> dict[str, Any]:
     return {"success": False, "error": "No matching application found"}
 
 
-def infer_status(proc: ProcInfo, session: dict[str, Any] | None, config: dict[str, Any]) -> str:
+def infer_status(proc: ProcInfo | None, session: dict[str, Any] | None, config: dict[str, Any], agent_type: str | None = None) -> str:
     now = utc_now_ts()
     cfg = config.get("status", {})
     heartbeat_ts = session.get("heartbeat_ts") if session else None
@@ -1329,11 +1399,18 @@ def infer_status(proc: ProcInfo, session: dict[str, Any] | None, config: dict[st
         except re.error:
             continue
 
-    if proc.cpu >= float(cfg.get("busy_cpu_threshold", 20.0)) or proc.stat.startswith(("R", "D")):
+    if proc and (proc.cpu >= float(cfg.get("busy_cpu_threshold", 20.0)) or proc.stat.startswith(("R", "D"))):
         return "busy"
     if heartbeat_age is not None and heartbeat_age <= int(cfg.get("active_heartbeat_sec", 120)):
         return "active"
-    if heartbeat_age is not None and heartbeat_age >= int(cfg.get("stale_heartbeat_sec", 900)):
+    
+    # Use different stale threshold for Cursor (24 hours vs 15 minutes)
+    if agent_type == "cursor":
+        stale_threshold = int(cfg.get("cursor_stale_sec", 86400))  # 24 hours default
+    else:
+        stale_threshold = int(cfg.get("stale_heartbeat_sec", 900))  # 15 minutes default
+    
+    if heartbeat_age is not None and heartbeat_age >= stale_threshold:
         return "stale"
     return "idle"
 
@@ -1346,6 +1423,7 @@ def summarize_host(config: dict[str, Any], host_cfg: dict[str, Any]) -> dict[str
     codex_procs = [p for p in procs if p.agent_type == "codex"]
     claude_procs = [p for p in procs if p.agent_type == "claude"]
     droid_procs = [p for p in procs if p.agent_type == "droid"]
+    # Cursor has no process detection - sessions only
 
     codex_sessions = []
     for path in get_recent_files(host_paths.get("codex_sessions"), "*.jsonl", config.get("session_scan_limit", 120), True):
@@ -1370,9 +1448,32 @@ def summarize_host(config: dict[str, Any], host_cfg: dict[str, Any]) -> dict[str
         if session:
             droid_sessions.append(session)
 
+    # Cursor sessions: ~/.cursor/projects/[PROJECT]/agent-transcripts/[SESSION_ID]/[SESSION_ID].jsonl
+    cursor_sessions = []
+    cursor_base = host_paths.get("cursor_projects")
+    if cursor_base:
+        cursor_path = Path(expand_path(cursor_base))
+        if cursor_path.exists():
+            # Find all session files (not in subagents/)
+            cursor_files = []
+            for session_file in cursor_path.rglob("agent-transcripts/*/*.jsonl"):
+                # Skip subagent files
+                if "subagents" not in str(session_file):
+                    cursor_files.append(session_file)
+            # Sort by modification time and limit
+            cursor_files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            cursor_files = cursor_files[:config.get("session_scan_limit", 120)]
+            
+            for path in cursor_files:
+                session = parse_cursor_session(path)
+                if session:
+                    cursor_sessions.append(session)
+
     codex_match = match_sessions(codex_procs, codex_sessions)
     claude_match = match_sessions(claude_procs, claude_sessions)
     droid_match = match_sessions(droid_procs, droid_sessions)
+    # Cursor has no process matching - all sessions become virtual agents
+    cursor_match = {}
 
     aliases = read_json_file(config.get("aliases_file", BASE_DIR / "session_aliases.json"), {})
     send_template = host_cfg.get("send_command_template") or config.get("send_command_template")
@@ -1396,7 +1497,7 @@ def summarize_host(config: dict[str, Any], host_cfg: dict[str, Any]) -> dict[str
             branch_cache[cwd or ""] = (session or {}).get("git_branch") or git_branch(cwd)
         branch = branch_cache[cwd or ""]
         heartbeat_ts = (session or {}).get("heartbeat_ts")
-        status = infer_status(proc, session, config)
+        status = infer_status(proc, session, config, proc.agent_type)
         
         # Detect parent application (for local hosts only)
         parent_app = None
@@ -1436,6 +1537,56 @@ def summarize_host(config: dict[str, Any], host_cfg: dict[str, Any]) -> dict[str
                 "updated_at": iso_now(),
             }
         )
+
+    # Add unmatched Cursor sessions as virtual agents (sessions without processes)
+    # Filter: only show active/idle, skip stale sessions
+    matched_cursor_session_ids = {s.get("session_id") for s in cursor_match.values() if s}
+    for session in cursor_sessions:
+        if session.get("session_id") in matched_cursor_session_ids:
+            continue
+        
+        # Check status first - skip stale sessions (use Cursor-specific threshold)
+        status = infer_status(None, session, config, "cursor")
+        if status == "stale":
+            continue
+        
+        cwd = session.get("cwd")
+        if cwd not in branch_cache:
+            branch_cache[cwd or ""] = session.get("git_branch") or git_branch(cwd)
+        branch = branch_cache[cwd or ""]
+        heartbeat_ts = session.get("heartbeat_ts")
+        
+        agents.append({
+            "id": f"{host_id}:cursor:{session.get('session_id')}",
+            "rename_key": f"{host_id}:cursor:{session.get('session_id') or cwd}",
+            "host": host_cfg["name"],
+            "host_id": host_id,
+            "host_mode": host_cfg.get("mode", "local"),
+            "agent_type": "cursor",
+            "pid": None,
+            "ppid": None,
+            "project": session.get("project") or (os.path.basename(cwd) if cwd else None),
+            "display_name": aliases.get(f"{host_id}:cursor:{session.get('session_id') or cwd}"),
+            "cwd": cwd,
+            "branch": branch,
+            "status": status,
+            "heartbeat_ts": heartbeat_ts,
+            "heartbeat_age_sec": (utc_now_ts() - heartbeat_ts) if heartbeat_ts else None,
+            "parent_app": None,
+            "parent_app_icon": None,
+            "uptime_sec": None,
+            "cpu": 0,
+            "mem": 0,
+            "stat": "",
+            "command": f"Cursor AI Chat - {session.get('project') or 'unknown'}",
+            "recent_output": session.get("recent_output", ""),
+            "pending_items": session.get("pending_items", []),
+            "session_id": session.get("session_id"),
+            "session_file": session.get("source_file"),
+            "last_user_message": session.get("last_user_message"),
+            "interactive_supported": False,
+            "updated_at": iso_now(),
+        })
 
     counts = Counter(a["status"] for a in agents)
     return {
@@ -2016,6 +2167,32 @@ class DashboardHandler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length) if length else b"{}"
         data = safe_json_loads(raw.decode("utf-8", "ignore")) or {}
         assert self.store is not None
+
+        if parsed.path == "/api/focus":
+            # Focus window by app name (for Cursor virtual agents)
+            if not _IS_MACOS:
+                self._send_json({"success": False, "error": "Only macOS is supported"})
+                return
+            app_name = str(data.get("app_name", "")).strip()
+            if not app_name:
+                self._send_json({"success": False, "error": "Missing app_name parameter"})
+                return
+            try:
+                import subprocess
+                script = f'tell application "{app_name}" to activate'
+                result = subprocess.run(
+                    ["osascript", "-e", script],
+                    capture_output=True,
+                    text=True,
+                    timeout=3
+                )
+                if result.returncode == 0:
+                    self._send_json({"success": True, "app_name": app_name})
+                else:
+                    self._send_json({"success": False, "error": result.stderr.strip() or "Failed to activate"})
+            except Exception as exc:
+                self._send_json({"success": False, "error": str(exc)})
+            return
 
         if parsed.path == "/api/rename":
             rename_key = str(data.get("rename_key", "")).strip()
