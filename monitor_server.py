@@ -22,7 +22,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 
 _IS_MACOS = sys.platform == "darwin"
@@ -733,6 +733,12 @@ def infer_agent_type(args: str) -> str:
             return ""
         return "claude"
 
+    if "droid" in basenames:
+        # Skip droid exec subprocesses
+        if "exec" in lowered and "--input-format" in lowered and "stream-jsonrpc" in lowered:
+            return ""
+        return "droid"
+
     return ""
 
 
@@ -950,6 +956,127 @@ def parse_claude_session(path: Path, todos_root: str | None, tasks_root: str | N
     }
 
 
+def parse_droid_session(path: Path) -> dict[str, Any] | None:
+    """Parse Factory Droid session file (.jsonl format)."""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
+        return None
+    if not lines:
+        return None
+
+    session_id = path.stem
+    cwd = None
+    start_ts = None
+    heartbeat_ts = path.stat().st_mtime
+    recent_output = ""
+    last_user = ""
+    pending_items = []
+
+    # Parse first line for session_start
+    first_obj = safe_json_loads(lines[0])
+    if isinstance(first_obj, dict) and first_obj.get("type") == "session_start":
+        session_id = first_obj.get("id") or session_id
+        cwd = first_obj.get("cwd")
+        start_ts = parse_iso_ts(first_obj.get("timestamp"))
+
+    # Scan all lines for timestamps and metadata
+    for raw in lines:
+        obj = safe_json_loads(raw)
+        if not isinstance(obj, dict):
+            continue
+        
+        ts = parse_iso_ts(obj.get("timestamp"))
+        if ts:
+            heartbeat_ts = max(heartbeat_ts, ts)
+            if start_ts is None or ts < start_ts:
+                start_ts = ts
+        
+        # Extract cwd from messages if not found
+        if not cwd and obj.get("type") == "message":
+            msg = obj.get("message", {})
+            if isinstance(msg, dict):
+                content = msg.get("content", [])
+                if isinstance(content, list):
+                    for item in content:
+                        if isinstance(item, dict) and item.get("type") == "text":
+                            text = item.get("text", "")
+                            # Try to extract cwd from system-reminder
+                            if "% pwd" in text and "\n/" in text:
+                                for line in text.split("\n"):
+                                    if line.startswith("/") and not line.startswith("/ "):
+                                        cwd = line.strip()
+                                        break
+
+    # Parse recent messages for output and user input
+    for raw in reversed(lines[-80:]):
+        obj = safe_json_loads(raw)
+        if not isinstance(obj, dict) or obj.get("type") != "message":
+            continue
+        
+        msg = obj.get("message", {})
+        if not isinstance(msg, dict):
+            continue
+        
+        role = msg.get("role")
+        content = msg.get("content", [])
+        
+        # Extract assistant's recent output
+        if role == "assistant" and not recent_output:
+            if isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict):
+                        if item.get("type") == "text" and item.get("text"):
+                            recent_output = item["text"]
+                            break
+                        elif item.get("type") == "tool_use":
+                            # Agent is working (using tools)
+                            tool_name = item.get("name", "")
+                            recent_output = f"[Using tool: {tool_name}]"
+                            break
+        
+        # Extract user's last message
+        if role == "user" and not last_user:
+            if isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        text = item.get("text", "")
+                        # Skip system reminders
+                        if not text.startswith("<system-reminder>"):
+                            last_user = text
+                            break
+
+    # Check for pending work (AskUser, waiting patterns)
+    if recent_output:
+        # Check if recent output indicates waiting for user input
+        waiting_indicators = [
+            "AskUser",
+            "Would you like",
+            "Do you want",
+            "Should I",
+            "Shall I",
+            "Please confirm",
+            "Please provide",
+            "which option",
+            "Let me know"
+        ]
+        for indicator in waiting_indicators:
+            if indicator.lower() in recent_output.lower():
+                pending_items.append(truncate(recent_output, 180))
+                break
+
+    return {
+        "session_id": session_id,
+        "cwd": cwd,
+        "start_ts": start_ts,
+        "heartbeat_ts": heartbeat_ts,
+        "recent_output": truncate(recent_output),
+        "pending_items": pending_items or ([truncate(last_user, 180)] if last_user else []),
+        "last_user_message": truncate(last_user, 180),
+        "source_file": str(path),
+    }
+
+
 @dataclass
 class ProcInfo:
     pid: int
@@ -1062,6 +1189,130 @@ def match_sessions(processes: list[ProcInfo], sessions: list[dict[str, Any]]) ->
     return out
 
 
+def detect_parent_application(pid: int) -> dict[str, Any] | None:
+    """Detect which application the process is running in."""
+    if not _IS_MACOS:
+        return None
+    
+    try:
+        proc = _psutil.Process(pid)
+        
+        # Traverse up to 10 levels in the process tree
+        for _ in range(10):
+            proc = proc.parent()
+            if not proc:
+                break
+            
+            name = proc.name().lower()
+            
+            # Terminal applications
+            if 'terminal' in name and 'app' in name:
+                return {"app_name": "Terminal", "app_type": "terminal", "app_pid": proc.pid, "app_icon": "🖥️"}
+            elif 'iterm' in name:
+                return {"app_name": "iTerm2", "app_type": "terminal", "app_pid": proc.pid, "app_icon": "💻"}
+            elif 'ghostty' in name:
+                return {"app_name": "Ghostty", "app_type": "terminal", "app_pid": proc.pid, "app_icon": "👻"}
+            
+            # IDE applications
+            elif 'goland' in name:
+                return {"app_name": "GoLand", "app_type": "ide", "app_pid": proc.pid, "app_icon": "🐹"}
+            elif 'idea' in name and 'jetbrains' not in name:
+                return {"app_name": "IntelliJ IDEA", "app_type": "ide", "app_pid": proc.pid, "app_icon": "💡"}
+            elif 'pycharm' in name:
+                return {"app_name": "PyCharm", "app_type": "ide", "app_pid": proc.pid, "app_icon": "🐍"}
+            elif 'webstorm' in name:
+                return {"app_name": "WebStorm", "app_type": "ide", "app_pid": proc.pid, "app_icon": "🌐"}
+            elif 'clion' in name:
+                return {"app_name": "CLion", "app_type": "ide", "app_pid": proc.pid, "app_icon": "🔧"}
+            elif 'code' in name or 'visual studio code' in name.lower():
+                return {"app_name": "Visual Studio Code", "app_type": "ide", "app_pid": proc.pid, "app_icon": "📝"}
+        
+        return None
+        
+    except Exception:
+        return None
+
+
+def focus_window_by_pid(pid: int) -> dict[str, Any]:
+    """Focus the window containing the process."""
+    if not _IS_MACOS:
+        return {"success": False, "error": "Only macOS is supported"}
+    
+    # Detect the parent application
+    app_info = detect_parent_application(pid)
+    
+    if not app_info:
+        # Fallback: try common applications
+        return focus_fallback(pid)
+    
+    app_name = app_info["app_name"]
+    
+    try:
+        # Use simple activate command (more reliable)
+        script = f'tell application "{app_name}" to activate'
+        
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=3
+        )
+        
+        if result.returncode == 0:
+            return {
+                "success": True,
+                "pid": pid,
+                "app_name": app_name,
+                "app_type": app_info["app_type"]
+            }
+        else:
+            return {
+                "success": False,
+                "error": result.stderr.strip() or "Failed to activate window",
+                "app_name": app_name
+            }
+            
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "app_name": app_name
+        }
+
+
+def focus_fallback(pid: int) -> dict[str, Any]:
+    """Fallback: try to activate common applications."""
+    apps = ["Terminal", "iTerm2", "Ghostty", "Visual Studio Code", "GoLand", "IntelliJ IDEA", "PyCharm"]
+    
+    for app in apps:
+        try:
+            script = f'''
+            tell application "System Events"
+                if exists process "{app}" then
+                    tell process "{app}"
+                        set frontmost to true
+                    end tell
+                    return true
+                end if
+            end tell
+            return false
+            '''
+            
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True,
+                text=True,
+                timeout=3
+            )
+            
+            if result.returncode == 0 and result.stdout.strip() == "true":
+                return {"success": True, "pid": pid, "app_name": app, "method": "fallback"}
+        except:
+            continue
+    
+    return {"success": False, "error": "No matching application found"}
+
+
 def infer_status(proc: ProcInfo, session: dict[str, Any] | None, config: dict[str, Any]) -> str:
     now = utc_now_ts()
     cfg = config.get("status", {})
@@ -1092,6 +1343,7 @@ def summarize_host(config: dict[str, Any], host_cfg: dict[str, Any]) -> dict[str
     procs = dedupe_processes(list_processes())
     codex_procs = [p for p in procs if p.agent_type == "codex"]
     claude_procs = [p for p in procs if p.agent_type == "claude"]
+    droid_procs = [p for p in procs if p.agent_type == "droid"]
 
     codex_sessions = []
     for path in get_recent_files(host_paths.get("codex_sessions"), "*.jsonl", config.get("session_scan_limit", 120), True):
@@ -1107,8 +1359,18 @@ def summarize_host(config: dict[str, Any], host_cfg: dict[str, Any]) -> dict[str
         if session:
             claude_sessions.append(session)
 
+    droid_sessions = []
+    for path in get_recent_files(host_paths.get("droid_sessions"), "*.jsonl", config.get("session_scan_limit", 120), True):
+        # Skip settings files
+        if path.name.endswith(".settings.json"):
+            continue
+        session = parse_droid_session(path)
+        if session:
+            droid_sessions.append(session)
+
     codex_match = match_sessions(codex_procs, codex_sessions)
     claude_match = match_sessions(claude_procs, claude_sessions)
+    droid_match = match_sessions(droid_procs, droid_sessions)
 
     aliases = read_json_file(config.get("aliases_file", BASE_DIR / "session_aliases.json"), {})
     send_template = host_cfg.get("send_command_template") or config.get("send_command_template")
@@ -1117,7 +1379,14 @@ def summarize_host(config: dict[str, Any], host_cfg: dict[str, Any]) -> dict[str
     branch_cache: dict[str, str | None] = {}
     host_id = host_identity(host_cfg)
     for proc in procs:
-        session = codex_match.get(proc.pid) if proc.agent_type == "codex" else claude_match.get(proc.pid)
+        if proc.agent_type == "codex":
+            session = codex_match.get(proc.pid)
+        elif proc.agent_type == "claude":
+            session = claude_match.get(proc.pid)
+        elif proc.agent_type == "droid":
+            session = droid_match.get(proc.pid)
+        else:
+            session = None
         if not session and "+" not in proc.stat and proc.cpu < 0.2:
             continue
         cwd = proc.cwd or (session or {}).get("cwd")
@@ -1126,6 +1395,12 @@ def summarize_host(config: dict[str, Any], host_cfg: dict[str, Any]) -> dict[str
         branch = branch_cache[cwd or ""]
         heartbeat_ts = (session or {}).get("heartbeat_ts")
         status = infer_status(proc, session, config)
+        
+        # Detect parent application (for local hosts only)
+        parent_app = None
+        if host_cfg.get("mode") == "local" and _IS_MACOS:
+            parent_app = detect_parent_application(proc.pid)
+        
         agents.append(
             {
                 "id": f"{host_id}:{proc.agent_type}:{proc.pid}",
@@ -1143,6 +1418,8 @@ def summarize_host(config: dict[str, Any], host_cfg: dict[str, Any]) -> dict[str
                 "status": status,
                 "heartbeat_ts": heartbeat_ts,
                 "heartbeat_age_sec": (utc_now_ts() - heartbeat_ts) if heartbeat_ts else None,
+                "parent_app": parent_app["app_name"] if parent_app else None,
+                "parent_app_icon": parent_app["app_icon"] if parent_app else None,
                 "uptime_sec": proc.etimes,
                 "cpu": proc.cpu,
                 "mem": proc.mem,
@@ -1711,6 +1988,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
             threading.Thread(target=self.store.refresh, daemon=True).start()
             self._send_json({"ok": True})
             return
+        if parsed.path == "/api/focus":
+            # Focus window by PID
+            params = parse_qs(parsed.query)
+            pid = int(params.get("pid", [0])[0]) if params.get("pid") else 0
+            
+            if pid <= 0:
+                result = {"success": False, "error": "Invalid PID"}
+            else:
+                result = focus_window_by_pid(pid)
+            
+            self._send_json(result)
+            return
         if parsed.path in {"/", "/index.html"}:
             self._serve_static("index.html")
             return
@@ -1861,7 +2150,11 @@ def main() -> None:
         return
 
     config = load_config(args.config)
-    vault = bootstrap_vault(config)
+    # Only initialize vault if there are managed hosts
+    if config.get("managed_hosts"):
+        vault = bootstrap_vault(config)
+    else:
+        vault = None
     run_server(config, args.host, args.port, vault)
 
 

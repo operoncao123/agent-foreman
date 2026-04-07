@@ -5,7 +5,7 @@ const state = {
   managedHosts: [],
 };
 
-const toolOrder = ["codex", "claude"];
+const toolOrder = ["codex", "claude", "droid"];
 const laneGroups = [
   { key: "working", label: "开工", statuses: ["busy", "active"] },
   { key: "slacking", label: "摸鱼", statuses: ["idle", "stale"] },
@@ -229,7 +229,9 @@ function makeCard(agent) {
   node.querySelector(".status-pill").textContent = avatarCaption(agent.status);
   node.querySelector(".status-pill").classList.add(`status-${agent.status}`);
   const typePill = node.querySelector(".type-pill");
-  typePill.textContent = agent.agent_type === "claude" ? "Claude 班组" : "Codex 班组";
+  typePill.textContent = 
+    agent.agent_type === "claude" ? "Claude 班组" : 
+    agent.agent_type === "droid" ? "Droid 班组" : "Codex 班组";
   typePill.classList.add(`type-${agent.agent_type}`);
   node.classList.add(`agent-type-${agent.agent_type}`);
   const hostPill = node.querySelector(".host-pill");
@@ -314,25 +316,78 @@ function makeCard(agent) {
       }
     });
   }
+  
+  // Focus button - only show for local hosts with detected parent app
+  const focusBtn = node.querySelector(".focus-btn");
+  if (agent.host_mode === "local" && agent.parent_app) {
+    focusBtn.textContent = agent.parent_app;
+    focusBtn.style.display = "inline-block";
+    
+    // Add appropriate class based on app type
+    if (agent.parent_app_type === "terminal") {
+      focusBtn.classList.add("app-terminal");
+    } else if (agent.parent_app_type === "ide") {
+      focusBtn.classList.add("app-ide");
+    }
+    
+    focusBtn.onclick = async () => {
+      if (focusBtn.disabled) return;
+      focusBtn.disabled = true;
+      const origText = focusBtn.textContent;
+      focusBtn.textContent = "跳转中...";
+      
+      try {
+        const res = await fetch(`/api/focus?pid=${agent.pid}`);
+        const data = await res.json();
+        
+        if (data.success) {
+          focusBtn.textContent = "✓ 已跳转";
+          setTimeout(() => {
+            focusBtn.textContent = origText;
+          }, 2000);
+        } else {
+          setFeedback(`跳转失败: ${data.error || '未知错误'}`, "err");
+          focusBtn.textContent = origText;
+        }
+      } catch (err) {
+        setFeedback(`跳转失败: ${err.message}`, "err");
+        focusBtn.textContent = origText;
+      } finally {
+        focusBtn.disabled = false;
+      }
+    };
+  }
+  
   return node;
 }
 
 function buildToolSection(tool, agents) {
   const section = document.createElement("section");
   section.className = `tool-section ${tool}`;
-  const title = tool === "codex" ? "Codex 班组" : "Claude 班组";
-  const subtitle =
-    tool === "codex"
-      ? "写代码这队牛马，谁卡住了、谁摸鱼了、谁该催，一眼翻出来。"
-      : "做任务这队牛马，谁还在装忙、谁停工了，工头都盯着。";
+  section.dataset.tool = tool;
+  section.dataset.collapsed = "false";
+  
+  // Tool-specific labels
+  const toolConfig = {
+    codex: { title: "Codex 班组", kicker: "写码工地", subtitle: "写代码这队牛马，谁卡住了、谁摸鱼了、谁该催，一眼翻出来。" },
+    claude: { title: "Claude 班组", kicker: "跑活工地", subtitle: "做任务这队牛马，谁还在装忙、谁停工了，工头都盯着。" },
+    droid: { title: "Droid 班组", kicker: "AI 工地", subtitle: "Factory Droid 牛马们的工作状态，实时监控，一目了然。" },
+  };
+  const config = toolConfig[tool] || { title: `${tool} 班组`, kicker: "工地", subtitle: "牛马工作状态监控" };
+  
   section.innerHTML = `
     <div class="tool-head">
       <div class="tool-title-wrap">
-        <div class="tool-kicker">${tool === "codex" ? "写码工地" : "跑活工地"}</div>
-        <h2 class="tool-title">${title}</h2>
-        <p class="tool-subtitle">${subtitle}</p>
+        <div class="tool-kicker">${config.kicker}</div>
+        <h2 class="tool-title">${config.title}</h2>
+        <p class="tool-subtitle">${config.subtitle}</p>
       </div>
-      <div class="tool-badge ${tool}">${agents.length} 个牛马</div>
+      <div class="tool-controls">
+        <div class="tool-badge ${tool}">${agents.length} 个牛马</div>
+        <button class="collapse-btn" data-tool="${tool}" title="展开/收起">
+          <span class="collapse-icon">▼</span>
+        </button>
+      </div>
     </div>
     <div class="tool-grid"></div>
   `;
@@ -379,9 +434,25 @@ function renderBoard(snapshot) {
   const byTool = {
     codex: agents.filter((a) => a.agent_type === "codex"),
     claude: agents.filter((a) => a.agent_type === "claude"),
+    droid: agents.filter((a) => a.agent_type === "droid"),
   };
-  toolOrder.forEach((tool) => {
-    board.appendChild(buildToolSection(tool, byTool[tool] || []));
+  
+  // Sort tools by agent count (descending)
+  const sortedTools = toolOrder.slice().sort((a, b) => {
+    return (byTool[b] || []).length - (byTool[a] || []).length;
+  });
+  
+  sortedTools.forEach((tool) => {
+    const section = buildToolSection(tool, byTool[tool] || []);
+    board.appendChild(section);
+    
+    // Restore collapsed state if previously set
+    const wasCollapsed = localStorage.getItem(`section-collapsed-${tool}`) === "true";
+    if (wasCollapsed) {
+      section.dataset.collapsed = "true";
+      section.querySelector(".tool-grid").style.display = "none";
+      section.querySelector(".collapse-icon").textContent = "▶";
+    }
   });
   // restore saved inputs and focus
   board.querySelectorAll(".agent-card[data-agent-id]").forEach((card) => {
@@ -639,6 +710,30 @@ $("testHostBtn").addEventListener("click", async () => {
     await loadDashboard();
   } catch (err) {
     setHostFormFeedback(String(err.message || err), "err");
+  }
+});
+
+// Collapse/expand section toggle
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest(".collapse-btn");
+  if (!btn) return;
+  
+  const tool = btn.dataset.tool;
+  const section = btn.closest(".tool-section");
+  const grid = section.querySelector(".tool-grid");
+  const icon = btn.querySelector(".collapse-icon");
+  
+  const isCollapsed = section.dataset.collapsed === "true";
+  section.dataset.collapsed = isCollapsed ? "false" : "true";
+  
+  if (isCollapsed) {
+    grid.style.display = "";
+    icon.textContent = "▼";
+    localStorage.setItem(`section-collapsed-${tool}`, "false");
+  } else {
+    grid.style.display = "none";
+    icon.textContent = "▶";
+    localStorage.setItem(`section-collapsed-${tool}`, "true");
   }
 });
 

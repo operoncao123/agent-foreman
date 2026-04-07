@@ -638,6 +638,12 @@ input[type="search"] {
   line-height: 1.58;
 }
 
+.tool-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
 .tool-badge {
   padding: 0.5rem 0.78rem;
 }
@@ -650,6 +656,44 @@ input[type="search"] {
 .tool-badge.claude {
   background: var(--claude-soft);
   color: var(--claude);
+}
+
+.tool-badge.droid {
+  background: rgba(5, 150, 105, 0.12);
+  color: #059669;
+  border: 1.5px solid rgba(5, 150, 105, 0.3);
+}
+
+.collapse-btn {
+  padding: 0.4rem 0.7rem;
+  background: var(--panel-strong);
+  border: 1.5px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+  transition: all 0.2s;
+  font-family: inherit;
+}
+
+.collapse-btn:hover {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+.collapse-btn:active {
+  transform: scale(0.95);
+}
+
+.collapse-icon {
+  display: inline-block;
+  font-size: 0.7rem;
+  transition: transform 0.2s;
+}
+
+.tool-section[data-collapsed="true"] .tool-grid {
+  display: none;
 }
 
 .tool-grid {
@@ -748,6 +792,62 @@ input[type="search"] {
   border: 1.5px solid rgba(169, 72, 36, 0.25);
 }
 
+.type-pill.type-droid {
+  background: rgba(5, 150, 105, 0.08);
+  color: #059669;
+  border: 1.5px solid rgba(5, 150, 105, 0.25);
+}
+
+.app-pill {
+  display: inline-block;
+  padding: 0.42rem 0.66rem;
+  font: 700 10px/1 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border-radius: 999px;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.app-pill:hover {
+  opacity: 0.85;
+  transform: translateY(-1px);
+}
+
+.app-pill:active {
+  transform: translateY(0);
+}
+
+.app-pill:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.app-pill.app-terminal {
+  background: linear-gradient(135deg, #e3f2fd 0%, #bbdefb 100%);
+  color: #0d47a1;
+  border: 1.5px solid rgba(13, 71, 161, 0.22);
+}
+
+.app-pill.app-ide {
+  background: linear-gradient(135deg, #fff3e0 0%, #ffe0b2 100%);
+  color: #e65100;
+  border: 1.5px solid rgba(230, 81, 0, 0.22);
+}
+
+.app-pill.rename-btn {
+  background: #eef2f8;
+  color: #3a4a62;
+  border: 1.5px solid rgba(58, 74, 98, 0.22);
+}
+
+.app-pill.rename-btn:hover {
+  background: #e5e9f0;
+}
+
 .host-pill {
   padding: 0.42rem 0.66rem;
   background: #eef2f8;
@@ -770,6 +870,10 @@ input[type="search"] {
 
 .agent-card.agent-type-claude {
   border-color: rgba(169, 72, 36, 0.35);
+}
+
+.agent-card.agent-type-droid {
+  border-color: rgba(5, 150, 105, 0.45);
 }
 
 .status-needs-input { background: var(--needs-soft); color: var(--red); }
@@ -816,6 +920,20 @@ input[type="search"] {
   justify-content: space-between;
   align-items: flex-start;
   gap: 10px;
+}
+
+.action-btns {
+
+.action-btns {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  align-items: flex-end;
+}
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  align-items: flex-end;
 }
 
 .project {
@@ -890,6 +1008,8 @@ input[type="search"] {
   align-items: center;
   padding: 0 2px;
 }
+
+
 
 .mini-btn {
   padding: 0.56rem 0.8rem;
