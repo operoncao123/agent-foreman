@@ -1214,6 +1214,8 @@ def detect_parent_application(pid: int) -> dict[str, Any] | None:
                 return {"app_name": "Ghostty", "app_type": "terminal", "app_pid": proc.pid, "app_icon": "👻"}
             
             # IDE applications
+            elif 'cursor' in name:
+                return {"app_name": "Cursor", "app_type": "ide", "app_pid": proc.pid, "app_icon": "🖱️"}
             elif 'goland' in name:
                 return {"app_name": "GoLand", "app_type": "ide", "app_pid": proc.pid, "app_icon": "🐹"}
             elif 'idea' in name and 'jetbrains' not in name:
@@ -1282,7 +1284,7 @@ def focus_window_by_pid(pid: int) -> dict[str, Any]:
 
 def focus_fallback(pid: int) -> dict[str, Any]:
     """Fallback: try to activate common applications."""
-    apps = ["Terminal", "iTerm2", "Ghostty", "Visual Studio Code", "GoLand", "IntelliJ IDEA", "PyCharm"]
+    apps = ["Terminal", "iTerm2", "Ghostty", "Cursor", "Visual Studio Code", "GoLand", "IntelliJ IDEA", "PyCharm"]
     
     for app in apps:
         try:
