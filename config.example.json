@@ -16,11 +16,13 @@
     "claude_projects": "~/.claude/projects",
     "claude_todos": "~/.claude/todos",
     "claude_tasks": "~/.claude/tasks",
-    "droid_sessions": "~/.factory/sessions"
+    "droid_sessions": "~/.factory/sessions",
+    "cursor_projects": "~/.cursor/projects"
   },
   "status": {
     "busy_cpu_threshold": 20.0,
     "active_heartbeat_sec": 120,
-    "stale_heartbeat_sec": 900
+    "stale_heartbeat_sec": 900,
+    "cursor_stale_sec": 86400
   }
 }

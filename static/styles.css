@@ -798,6 +798,12 @@ input[type="search"] {
   border: 1.5px solid rgba(5, 150, 105, 0.25);
 }
 
+.type-pill.type-cursor {
+  background: rgba(139, 92, 246, 0.08);
+  color: #7c3aed;
+  border: 1.5px solid rgba(139, 92, 246, 0.25);
+}
+
 .app-pill {
   display: inline-block;
   padding: 0.42rem 0.66rem;
@@ -874,6 +880,10 @@ input[type="search"] {
 
 .agent-card.agent-type-droid {
   border-color: rgba(5, 150, 105, 0.45);
+}
+
+.agent-card.agent-type-cursor {
+  border-color: rgba(139, 92, 246, 0.45);
 }
 
 .status-needs-input { background: var(--needs-soft); color: var(--red); }

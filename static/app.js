@@ -5,7 +5,7 @@ const state = {
   managedHosts: [],
 };
 
-const toolOrder = ["codex", "claude", "droid"];
+const toolOrder = ["codex", "claude", "droid", "cursor"];
 const laneGroups = [
   { key: "working", label: "开工", statuses: ["busy", "active"] },
   { key: "slacking", label: "摸鱼", statuses: ["idle", "stale"] },
@@ -231,7 +231,8 @@ function makeCard(agent) {
   const typePill = node.querySelector(".type-pill");
   typePill.textContent = 
     agent.agent_type === "claude" ? "Claude 班组" : 
-    agent.agent_type === "droid" ? "Droid 班组" : "Codex 班组";
+    agent.agent_type === "droid" ? "Droid 班组" : 
+    agent.agent_type === "cursor" ? "Cursor 班组" : "Codex 班组";
   typePill.classList.add(`type-${agent.agent_type}`);
   node.classList.add(`agent-type-${agent.agent_type}`);
   const hostPill = node.querySelector(".host-pill");
@@ -317,45 +318,77 @@ function makeCard(agent) {
     });
   }
   
-  // Focus button - only show for local hosts with detected parent app
+  // Focus button - show for agents with parent app OR for Cursor virtual agents
   const focusBtn = node.querySelector(".focus-btn");
-  if (agent.host_mode === "local" && agent.parent_app) {
-    focusBtn.textContent = agent.parent_app;
-    focusBtn.style.display = "inline-block";
-    
-    // Add appropriate class based on app type
-    if (agent.parent_app_type === "terminal") {
-      focusBtn.classList.add("app-terminal");
-    } else if (agent.parent_app_type === "ide") {
+  if (agent.host_mode === "local" && (agent.parent_app || agent.agent_type === "cursor")) {
+    // For Cursor virtual agents without parent_app
+    if (agent.agent_type === "cursor" && !agent.parent_app) {
+      focusBtn.textContent = "CURSOR";
       focusBtn.classList.add("app-ide");
-    }
-    
-    focusBtn.onclick = async () => {
-      if (focusBtn.disabled) return;
-      focusBtn.disabled = true;
-      const origText = focusBtn.textContent;
-      focusBtn.textContent = "跳转中...";
+      focusBtn.style.display = "inline-block";
       
-      try {
-        const res = await fetch(`/api/focus?pid=${agent.pid}`);
-        const data = await res.json();
+      focusBtn.onclick = async () => {
+        if (focusBtn.disabled) return;
+        focusBtn.disabled = true;
+        const origText = focusBtn.textContent;
+        focusBtn.textContent = "跳转中...";
         
-        if (data.success) {
-          focusBtn.textContent = "✓ 已跳转";
-          setTimeout(() => {
+        try {
+          const res = await postJson("/api/focus", { app_name: "Cursor" });
+          if (res.success) {
+            focusBtn.textContent = "✓ 已跳转";
+            setTimeout(() => {
+              focusBtn.textContent = origText;
+            }, 2000);
+          } else {
+            setFeedback(`跳转失败: ${res.error || '未知错误'}`, "err");
             focusBtn.textContent = origText;
-          }, 2000);
-        } else {
-          setFeedback(`跳转失败: ${data.error || '未知错误'}`, "err");
+          }
+        } catch (err) {
+          setFeedback(`跳转失败: ${err.message}`, "err");
           focusBtn.textContent = origText;
+        } finally {
+          focusBtn.disabled = false;
         }
-      } catch (err) {
-        setFeedback(`跳转失败: ${err.message}`, "err");
-        focusBtn.textContent = origText;
-      } finally {
-        focusBtn.disabled = false;
+      };
+    } else if (agent.parent_app) {
+      focusBtn.textContent = agent.parent_app;
+      focusBtn.style.display = "inline-block";
+      
+      // Add appropriate class based on app type
+      if (agent.parent_app_type === "terminal") {
+        focusBtn.classList.add("app-terminal");
+      } else if (agent.parent_app_type === "ide") {
+        focusBtn.classList.add("app-ide");
       }
-    };
+      
+      focusBtn.onclick = async () => {
+        if (focusBtn.disabled) return;
+        focusBtn.disabled = true;
+        const origText = focusBtn.textContent;
+        focusBtn.textContent = "跳转中...";
+        
+        try {
+          const res = await fetch(`/api/focus?pid=${agent.pid}`);
+          const data = await res.json();
+          
+          if (data.success) {
+            focusBtn.textContent = "✓ 已跳转";
+            setTimeout(() => {
+              focusBtn.textContent = origText;
+            }, 2000);
+          } else {
+            setFeedback(`跳转失败: ${data.error || '未知错误'}`, "err");
+            focusBtn.textContent = origText;
+          }
+        } catch (err) {
+          setFeedback(`跳转失败: ${err.message}`, "err");
+          focusBtn.textContent = origText;
+        } finally {
+          focusBtn.disabled = false;
+        }
+      };
+    }
   }
   
   return node;
@@ -372,6 +405,7 @@ function buildToolSection(tool, agents) {
     codex: { title: "Codex 班组", kicker: "写码工地", subtitle: "写代码这队牛马，谁卡住了、谁摸鱼了、谁该催，一眼翻出来。" },
     claude: { title: "Claude 班组", kicker: "跑活工地", subtitle: "做任务这队牛马，谁还在装忙、谁停工了，工头都盯着。" },
     droid: { title: "Droid 班组", kicker: "AI 工地", subtitle: "Factory Droid 牛马们的工作状态，实时监控，一目了然。" },
+    cursor: { title: "Cursor 班组", kicker: "IDE 工地", subtitle: "Cursor AI 编辑器里的牛马们，代码写得怎么样，看板一目了然。" },
   };
   const config = toolConfig[tool] || { title: `${tool} 班组`, kicker: "工地", subtitle: "牛马工作状态监控" };
   
@@ -435,6 +469,7 @@ function renderBoard(snapshot) {
     codex: agents.filter((a) => a.agent_type === "codex"),
     claude: agents.filter((a) => a.agent_type === "claude"),
     droid: agents.filter((a) => a.agent_type === "droid"),
+    cursor: agents.filter((a) => a.agent_type === "cursor"),
   };
   
   // Sort tools by agent count (descending)
@@ -443,7 +478,13 @@ function renderBoard(snapshot) {
   });
   
   sortedTools.forEach((tool) => {
-    const section = buildToolSection(tool, byTool[tool] || []);
+    const toolAgents = byTool[tool] || [];
+    // Skip empty agent groups
+    if (toolAgents.length === 0) {
+      return;
+    }
+    
+    const section = buildToolSection(tool, toolAgents);
     board.appendChild(section);
     
     // Restore collapsed state if previously set
