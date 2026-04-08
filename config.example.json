@@ -15,7 +15,8 @@
     "codex_sessions": "~/.codex/sessions",
     "claude_projects": "~/.claude/projects",
     "claude_todos": "~/.claude/todos",
-    "claude_tasks": "~/.claude/tasks"
+    "claude_tasks": "~/.claude/tasks",
+    "droid_sessions": "~/.factory/sessions"
   },
   "status": {
     "busy_cpu_threshold": 20.0,
